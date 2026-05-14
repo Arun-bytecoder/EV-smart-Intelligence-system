@@ -8,11 +8,11 @@ import cv2
 pipeline = EVDetectionPipeline()
 
 # Read and resize image for better detection
-frame = cv2.imread('data/samples/test_vehicle.jpg')
+frame = cv2.imread('data/samples/4ujrpdso_ev_625x300_12_February_26.webp')
 frame = cv2.resize(frame, (1280, 720))
 cv2.imwrite('data/samples/test_vehicle.jpg', frame)
 
-annotated, results = pipeline.process_image('data/samples/test_vehicle.jpg')
+annotated, results = pipeline.process_image('data/samples/ev_charging_station.jpg')
 
 print(f"\nTotal detections: {len(results)}")
 

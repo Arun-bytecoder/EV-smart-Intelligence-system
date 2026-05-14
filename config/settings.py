@@ -9,12 +9,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 class Settings:
 
     # --- Model paths ---
-    VEHICLE_MODEL_PATH = str(BASE_DIR / "models" / "yolov8n.pt")
+    VEHICLE_MODEL_PATH = str(BASE_DIR / "models" / "yolov8m.pt")
     PLATE_MODEL_PATH   = str(BASE_DIR / "models" / "plate_detector.pt")
 
     # --- Detection thresholds ---
-    VEHICLE_CONF_THRESHOLD = 0.35
-    PLATE_CONF_THRESHOLD   = 0.35
+    VEHICLE_CONF_THRESHOLD = 0.25
+    PLATE_CONF_THRESHOLD   = 0.25
     OCR_MIN_CONFIDENCE     = 0.55
 
     # --- HSV color ranges ---
@@ -36,7 +36,7 @@ class Settings:
     PLATE_REGEX = r"[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}"
 
     # --- Frame processing ---
-    FRAME_SKIP       = 3
+    FRAME_SKIP       = 10
     MIN_PLATE_HEIGHT = 200
 
     # --- Vahan API ---

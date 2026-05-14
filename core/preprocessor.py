@@ -1,6 +1,8 @@
 import cv2
+import os
 import numpy as np
 from config.settings import settings
+
 
 
 class Preprocessor:
@@ -89,3 +91,60 @@ class Preprocessor:
                                            flags=cv2.INTER_CUBIC,
                                            borderMode=cv2.BORDER_REPLICATE)
         return image
+    
+    
+class PlateEnhancer:
+
+    def __init__(self):
+        self.ready = False
+        self._load_model()
+
+    def _load_model(self):
+        try:
+            import urllib.request
+            import os
+
+            model_dir  = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "models"
+            )
+            model_path = os.path.join(model_dir, "EDSR_x4.pb")
+
+            if not os.path.exists(model_path):
+                print("Downloading EDSR super resolution model...")
+                os.makedirs(model_dir, exist_ok=True)
+                url = "https://github.com/Saafke/EDSR_Tensorflow/raw/master/models/EDSR_x4.pb"
+                urllib.request.urlretrieve(url, model_path)
+                print("EDSR model downloaded.")
+
+            self.sr = cv2.dnn_superres.DnnSuperResImpl_create()
+            self.sr.readModel(model_path)
+            self.sr.setModel("edsr", 4)
+            self.ready = True
+            print("Plate enhancer (EDSR 4x) ready.")
+
+        except Exception as e:
+            print(f"Plate enhancer not available: {e} — using Lanczos fallback.")
+            self.ready = False
+
+    def enhance(self, crop: np.ndarray) -> np.ndarray:
+        if crop is None or crop.size == 0:
+            return crop
+
+        if self.ready:
+            try:
+                enhanced = self.sr.upsample(crop)
+                print(f"EDSR enhanced: {crop.shape} → {enhanced.shape}")
+                return enhanced
+            except Exception as e:
+                print(f"EDSR enhance failed: {e}")
+
+        # Lanczos fallback
+        h, w = crop.shape[:2]
+        target_h = max(h * 4, 100)
+        scale    = target_h / h
+        return cv2.resize(
+            crop,
+            (int(w * scale), target_h),
+            interpolation=cv2.INTER_LANCZOS4
+        )

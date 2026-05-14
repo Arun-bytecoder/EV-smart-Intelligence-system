@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from typing import Optional
 
-from core.preprocessor import Preprocessor
+from core.preprocessor import Preprocessor, PlateEnhancer
 from core.detector import VehicleDetector, PlateDetector, DetectionResult
 from core.color_classifier import ColorClassifier, PlateColor
 from core.ocr_engine import OCREngine
@@ -26,6 +26,7 @@ class EVDetectionPipeline:
         self.vahan_client      = VahanClient()
         self.annotator         = Annotator()
         self.detection_logger  = DetectionLogger()
+        self.enhancer          = PlateEnhancer()
 
         self._processed_tracks = {}
         self._frame_count      = 0
@@ -59,24 +60,49 @@ class EVDetectionPipeline:
             )
 
             if plate_crop is None:
-                # Fallback: try OCR directly on bottom 30% of vehicle crop
                 x1, y1, x2, y2 = det.vehicle_bbox
                 vh = y2 - y1
-                # Crop bottom 35% of vehicle — where plate always is
-                fallback_crop = enhanced[
-                    y1 + int(vh * 0.65): y2,
-                    x1: x2
-                ]
-                if fallback_crop.size > 0:
-                    print("Plate detector failed — trying fallback bottom crop")
-                    import cv2
-                    cv2.imwrite('data/outputs/fallback_crop.jpg', fallback_crop)
-                    # Try color classification on fallback
-                    plate_color, color_conf, _ = self.color_classifier.classify(fallback_crop)
-                    reg_number, ocr_conf = self.ocr_engine.extract(fallback_crop)
+                vw = x2 - x1
+                
+                # Try multiple crop regions — different vehicles have plates at different positions
+                crop_regions = []
+                
+                if det.vehicle_class == "motorcycle":
+                    crop_regions = [
+                        # Primary: 35-55% height, center 50% width
+                        (y1 + int(vh * 0.35), y1 + int(vh * 0.55),
+                         x1 + int(vw * 0.25), x2 - int(vw * 0.25)),
+                        # Secondary: 30-60% height, wider
+                        (y1 + int(vh * 0.30), y1 + int(vh * 0.60),
+                         x1 + int(vw * 0.15), x2 - int(vw * 0.15)),
+                        # Tertiary: 20-50% height
+                        (y1 + int(vh * 0.20), y1 + int(vh * 0.50),
+                         x1 + int(vw * 0.20), x2 - int(vw * 0.20)),
+                    ]
+                else:
+                    # Cars/buses/trucks: plate is at bottom (70-100% height)
+                    crop_regions = [
+                        (y1 + int(vh * 0.72), y2,
+                         x1 + int(vw * 0.20), x2 - int(vw * 0.20)),
+                        (y1 + int(vh * 0.65), y2, x1, x2),
+                    ]
                     
-                    if reg_number:
-                        print(f"Fallback OCR extracted: {reg_number}")
+                extracted = False
+                for (fy1, fy2, fx1, fx2) in crop_regions:
+                    fallback_crop = enhanced[fy1:fy2, fx1:fx2]
+                    if fallback_crop.size == 0:
+                        continue
+                    print(f"Trying fallback crop: {fallback_crop.shape} for {det.vehicle_class}")
+                    cv2.imwrite('data/outputs/fallback_crop.jpg', fallback_crop)
+                    
+                    plate_color, color_conf, _ = self.color_classifier.classify(fallback_crop)
+                    print(f"Fallback color: {plate_color} | conf={color_conf:.2f}")
+                    
+                    enhanced_fallback    = self.enhancer.enhance(fallback_crop)
+                    reg_number, ocr_conf = self.ocr_engine.extract(enhanced_fallback)
+                    
+                    if reg_number or (plate_color != PlateColor.UNKNOWN and color_conf > 0.20):
+                        print(f"Fallback success: color={plate_color} reg={reg_number}")
                         confidence_result = self.confidence_engine.evaluate(
                             plate_color=plate_color,
                             color_conf=color_conf,
@@ -87,47 +113,28 @@ class EVDetectionPipeline:
                         self.detection_logger.log(det, confidence_result)
                         frame = self.annotator.draw_result(frame, det, confidence_result)
                         results.append(confidence_result)
-                    else:
-                        frame = self.annotator.draw_no_plate(frame, det)
-                else:
+                        extracted = True
+                        break
+                if not extracted:
                     frame = self.annotator.draw_no_plate(frame, det)
                 continue
-
             det.plate_bbox = plate_bbox
             det.plate_crop = plate_crop
             det.plate_conf = plate_conf
 
-            # Stage 2b: prepare plate crop
-            prepared_crop = self.preprocessor.prepare_plate_crop(plate_crop)
-
             # Stage 3: color classification
             plate_color, color_conf, color_scores = self.color_classifier.classify(plate_crop)
 
-
-            # Stage 4: OCR — run on RAW plate crop (best accuracy)
-            # Stage 4: OCR — enhance crop before reading
+            # Stage 4: enhance plate crop + OCR
             reg_number = ""
             ocr_conf   = 0.0
             if plate_color != PlateColor.UNKNOWN:
-                import cv2
-                # Aggressively upscale plate crop before OCR
-                h, w = plate_crop.shape[:2]
-                # Target minimum 60px height for OCR
-                if h < 60:
-                    scale = 60 / h
-                    enhanced_crop = cv2.resize(
-                        plate_crop,
-                        (int(w * scale), 60),
-                        interpolation=cv2.INTER_LANCZOS4
-                    )
-                else:
-                    enhanced_crop = plate_crop.copy()
-                # Save for debug
+                enhanced_crop = self.enhancer.enhance(plate_crop)
                 cv2.imwrite('data/outputs/pipeline_plate_crop.jpg', enhanced_crop)
-                print(f"Pipeline plate crop shape: {enhanced_crop.shape}")
+                print(f"Enhanced crop shape: {enhanced_crop.shape}")
                 reg_number, ocr_conf = self.ocr_engine.extract(enhanced_crop)
-            
-            # Stage 5: API verification
+
+            # Stage 5: API verification — disabled for POC phase 1
             api_result = None
 
             # Stage 6: confidence scoring
